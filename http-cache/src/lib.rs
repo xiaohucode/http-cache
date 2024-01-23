@@ -36,7 +36,7 @@ use std::{
     fmt::{self, Debug},
     str::FromStr,
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use http::{header::CACHE_CONTROL, request, response, StatusCode};
@@ -430,6 +430,8 @@ pub struct HttpCache<T: CacheManager> {
     pub manager: T,
     /// Override the default cache options.
     pub options: HttpCacheOptions,
+    /// Overrides any HTTP directive to delete entry past this duration.
+    pub max_stale: Option<Duration>,
 }
 
 #[allow(dead_code)]
@@ -502,6 +504,13 @@ impl<T: CacheManager> HttpCache<T> {
 
         if let Some(store) = self.manager.get(&cache_key).await? {
             let (mut res, policy) = store;
+            if let Some(max_stale) = self.max_stale {
+                let age = policy.age(SystemTime::now());
+                if age.as_millis() > max_stale.as_millis() {
+                    self.manager.delete(&cache_key).await?;
+                    return self.remote_fetch(&mut middleware).await;
+                }
+            }
             res.cache_lookup_status(HitOrMiss::HIT);
             if let Some(warning_code) = res.warning_code() {
                 // https://tools.ietf.org/html/rfc7234#section-4.3.4
